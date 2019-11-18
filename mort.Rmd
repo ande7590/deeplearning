@@ -1,0 +1,35 @@
+---
+title: "Mortality LSTM"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("pacman")) {
+  install.packages("pacman")
+}
+
+if (!require("keras")) {
+  devtools::install_github("rstudio/keras")
+}
+
+library(pacman)
+pacman::p_load(tidyverse, kableExtra, keras, tensorflow)
+
+use_condaenv("tf")
+```
+
+## Dataset
+
+```{r data-load}
+
+mort_tbl <- read_table("data/us_mort_data.txt") %>%
+  mutate()
+
+
+
+```
+
+
+

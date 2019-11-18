@@ -1,0 +1,44 @@
+---
+title: "Hello Tensorflow"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("pacman")) {
+  install.packages("pacman")
+  library("pacman")
+}
+
+pacman::p_load(devtools)
+
+if (!require("keras")) {
+  devtools::install_github("rstudio/keras")
+  library("keras")
+}
+
+pacman::p_load(tidyverse, keras, tensorflow)
+
+use_condaenv("tfv1")
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## Check if tensorflow is working
+
+```{r tf-canary-test}
+
+b <- tf$constant(50)
+x <- b * 10
+y <- x + b
+
+with(tf$Session() %as% sess, {
+  result <- y$eval()
+  print(result)
+})
+
+
+```
+\

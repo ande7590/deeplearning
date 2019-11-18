@@ -1,0 +1,79 @@
+---
+title: "Hello Tensorflow"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("pacman")) {
+  install.packages("pacman")
+  library("pacman")
+}
+
+pacman::p_load(devtools)
+
+if (!require("keras")) {
+  devtools::install_github("rstudio/keras")
+  library("keras")
+}
+
+pacman::p_load(tidyverse, keras, tensorflow)
+
+use_condaenv("tf")
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+```{r}
+
+tf$reset_default_graph()
+
+zeros <- tf$Variable(tf$random_normal(c(1L, 100L), stddev=0.001))
+
+sess <- tf$Session()
+sess$run(tf$global_variables_initializer())
+
+sess$run(zeros)
+sess$close()
+
+```
+
+```{r}
+
+inference = function(x) {
+  
+  init_zero = tf$constant_initializer(value=0)
+  
+  W = tf$get_variable("W", c(784L, 10L), initializer = init_zero)
+  b = tf$get_variable("b", c(10L), initializer = init_zero)
+  
+  output = tf$nn$softmax(tf$matmul(x, W) + b)
+  
+  return(output)
+}
+
+# cross entropy loss
+loss_func = function(output, y) {
+  cross_entropy = -1 * tf$reduce_sum(y * tf$log(tf$maximum(output, 1e-15)), reduction_indicies = 1)
+  return(tf$reduce_mean(cross_entropy))
+}
+
+train_func = 0
+
+
+tf$reset_default_graph()
+
+
+sess <- tf$Session()
+sess$run(tf$global_variables_initializer())
+
+sess$run(zeros)
+sess$close()
+
+```
+
+
+

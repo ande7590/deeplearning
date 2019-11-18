@@ -1,0 +1,306 @@
+---
+title: "Movie Data"
+author: "Mike McPhee Anderson"
+date: "11/1/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("pacman")) {
+  install.packages("pacman")
+  library("pacman")
+}
+
+pacman::p_load(devtools)
+
+if (!require("keras")) {
+  devtools::install_github("rstudio/keras")
+  library("keras")
+}
+
+pacman::p_load(tidyverse, caret, keras, tensorflow, kableExtra, Matrix)
+
+use_condaenv("tfv1")
+
+knitr::opts_chunk$set(echo = TRUE)
+
+
+```
+
+## Load Data
+
+```{r data-load}
+
+movie.titles <- read_csv("datasets/ml-20m/movies.csv") %>%
+  mutate(movieId = as.integer(movieId))
+
+movie.ratings <- read_csv("datasets/ml-20m/ratings.csv") %>%
+  mutate(userId = as.integer(userId),
+         movieId = as.integer(movieId),
+         timestamp = lubridate::as_datetime(timestamp))
+
+movie.titles %>%
+  head(10) %>%
+  kable(caption="Movies") %>%
+  kable_styling()
+
+movie.ratings %>%
+  head(10) %>%
+  kable(caption="Ratings") %>%
+  kable_styling()
+
+```
+
+### Calculate summary statistics on full dataset
+
+```{r}
+
+summary(movie.ratings)
+
+```
+
+
+### Random Sample
+
+* Take the top 1000 movies (most rated)
+
+```{r data-sample-ratings}
+
+sample_size <- 1000
+
+movie.sample <- movie.ratings %>%
+  group_by(movieId) %>%
+  summarise(rating_count = n_distinct(userId)) %>%
+  ungroup() %>%
+  arrange(desc(rating_count)) %>%
+  mutate(newMovieId = row_number()) %>%
+  filter(newMovieId <= !!sample_size)
+
+movie.sample %>%
+  kable(caption=sprintf("Sampling top %d movies", sample_size)) %>%
+  kable_styling()
+
+```
+
+* Sample 1000 users (at random)
+
+```{r data-sample-movies}
+
+movie.users.sample <- movie.ratings %>%
+  inner_join(movie.sample %>% 
+               select(movieId)) 
+
+unique_users_ids <- movie.users.sample %>% pull(userId) %>% unique()
+
+movie.users.sample <- movie.users.sample %>%
+  filter(userId %in% sample(unique_users_ids, !!sample_size)) %>%
+  inner_join(movie.sample %>% select(movieId)) %>%
+  group_by(userId) %>%
+  summarise(n_ratings = n_distinct(movieId))  %>%
+  mutate(newUserId = row_number())
+
+#write_csv(movie.users.sample, "datasets/movie.users.sample.csv")
+
+summary(movie.users.sample)
+
+```
+
+```{r data-sample-both}
+
+movie.ratings.sample <- movie.ratings %>%
+  inner_join(movie.users.sample) %>%
+  inner_join(movie.sample)
+
+summary(movie.ratings.sample)
+
+```
+
+
+### Split test / train
+
+```{r}
+
+training_set_size = 0.90
+
+df_size = nrow(movie.ratings.sample)
+
+training_idx = sample(1:df_size, floor(0.9 * df_size))
+
+training.data = movie.ratings.sample[training_idx, ]
+not.training.data = movie.ratings.sample[-training_idx, ]
+
+df_size = nrow(not.training.data)
+testing_idx = sample(1:df_size, floor(0.5 * df_size))
+
+testing.data = not.training.data[testing_idx, ]
+validation.data = not.training.data[-testing_idx, ]
+
+split.summary = data.frame(
+  dataset_name = c("Training Data", "Testing Data", "Validation Data"),
+  num_rows = c(nrow(training.data), nrow(testing.data), nrow(validation.data))
+)
+
+split.summary %>%
+  kable(caption="Dataset Sizes") %>%
+  kable_styling()
+
+```
+
+### Convert ratings dataframe into sparse matricies
+
+```{r}
+
+calc_sparsity <- function(sm) { 
+  sparsity = sum(sm > 0) / length(sm)
+  sprintf("Sparsity: %f", sparsity)
+  return(sparsity)
+}
+
+row_dim = length(unique(movie.ratings.sample$newUserId))
+col_dim = length(unique(movie.ratings.sample$newMovieId))
+
+sparse_matricies <- lapply(
+  list("train"=training.data, "test"=testing.data, "valid"=validation.data), 
+  function(df) {
+    sparseMatrix(
+      i = df$newUserId,
+      j = df$newMovieId,
+      x = df$rating,
+      dims = c(row_dim, col_dim)
+    )    
+  })
+
+print("Sparsities")
+print(lapply(sparse_matricies, calc_sparsity))
+```
+
+### Experiment One, Naive Model
+
+* Set the prediction to be the mode, calculate the MSE
+
+* Set the prediction to be the mean, calculate the MSE
+
+* Set the prediction to be the median, calculate the MSE
+
+```{r model-naive}
+
+calc_naive_models <- function(vec) {
+  vec_vals <- unique(vec)
+  mode_pred = vec[which.max(tabulate(match(vec, vec_vals)))]
+  return(list(
+    "mode"=mode_pred,
+    "median"=median(vec),
+    "mean"=floor(mean(vec) * 2) / 2
+  ))
+}
+
+# create naive models
+naive_models = calc_naive_models(training.data$rating)
+
+# create a function to calculate MSE
+sparse_mse_func = partial(
+  function(naive_model_pred, X) {
+   mean((X[which(X!=0)] - naive_model_pred)^2)
+  }, 
+  X=sparse_matricies[["train"]])
+
+# get baseline predictions for models
+mse_preds = lapply(naive_models, sparse_mse_func)
+
+print("Naive Model MSE")
+print(mse_preds)
+
+```
+
+### Experiment Two, compute based on average
+
+```{r model-avg}
+
+calc_user_avg_model <- function(df) {
+  user_avg <- df %>%
+    group_by(newUserId) %>%
+    summarise(pred = mean(rating)) %>%
+    ungroup()
+  
+  df %>% 
+    inner_join(user_avg) %>%
+    mutate(resid = (rating - pred)^2) %>%
+    pull(resid) %>%
+    mean() %>%
+    return()
+}
+
+print("Predict by user average:")
+calc_user_avg_model(training.data)
+
+```
+
+### Experiment Three, Latent Factors
+
+```{r model-latent}
+
+keras::backend()$clear_session()
+
+n_latent_factors = 5
+
+# User embedding
+n_users = nrow(training.data.sm)
+user_input <- keras::layer_input(shape = c(1), name='user') 
+user_embedding <- user_input %>% keras::layer_embedding(input_dim = n_users + 1, output_dim = n_latent_factors, 
+                                                        name='user_embedding')
+user_vec <- user_embedding %>% keras::layer_flatten(name='flatten_users')
+
+# Movie embedding
+n_movies = ncol(training.data.sm)
+movie_input <- keras::layer_input(shape = c(1), name='movie')
+movie_embedding <- movie_input %>% keras::layer_embedding(input_dim = n_movies + 1, output_dim = n_latent_factors,
+                                                          name='movie_embedding')
+movie_vec <- movie_embedding %>% keras::layer_flatten(name='flatten_movies')
+
+# Product of the two
+product_op = keras::layer_dot(c(user_vec, movie_vec), axes=1)
+
+latent_model = keras::keras_model(inputs=c(user_input, movie_input), outputs=product_op)
+
+latent_model %>% keras::compile(
+  optimizer=keras::optimizer_adam(), 
+  loss=keras::loss_mean_squared_error)
+
+training_history <- latent_model %>%
+  keras::fit(
+    x=list(training.data$newUserId, training.data$newMovieId),
+    y=training.data$rating, 
+    epochs=100,
+    validation_data = list(
+      list(validation.data$newUserId, validation.data$newMovieId),
+      validation.data$rating
+    ),
+    callbacks=keras::callback_early_stopping(patience=5))
+
+
+```
+
+```{r}
+
+test_preds = data.frame(
+  user_id = testing.data$newUserId,
+  movie_id = testing.data$newMovieId,
+  pred = floor(2*predict(latent_model, list(testing.data$newUserId, testing.data$newMovieId))) / 2,
+  actual = testing.data$rating
+)
+
+```
+
+
+```{r}
+
+tensorflow::tf$summary$FileWriter(logdir='tblogs', graph=keras::backend()$get_session()$graph)
+
+plot(training_history)
+
+```
+
+
